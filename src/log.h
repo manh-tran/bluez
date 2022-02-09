@@ -51,8 +51,7 @@ void __btd_enable_debug(struct btd_debug_desc *start,
 	__attribute__((used, section("__debug"), aligned(8))) = { \
 		.file = __FILE__, .flags = BTD_DEBUG_FLAG_DEFAULT, \
 	}; \
-	if (__btd_debug_desc.flags & BTD_DEBUG_FLAG_PRINT) \
-		btd_debug(idx, "%s:%s() " fmt, __FILE__, __func__ , ## arg); \
+	btd_debug(idx, "%s:%s() " fmt, __FILE__, __func__ , ## arg); \
 } while (0)
 
 #define DBG(fmt, arg...) DBG_IDX(0xffff, fmt, ## arg)

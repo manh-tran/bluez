@@ -38,6 +38,5 @@ struct obex_debug_desc {
 	__attribute__((used, section("__debug"), aligned(8))) = { \
 		.file = __FILE__, .flags = OBEX_DEBUG_FLAG_DEFAULT, \
 	}; \
-	if (__obex_debug_desc.flags & OBEX_DEBUG_FLAG_PRINT) \
-		obex_debug("%s:%s() " fmt,  __FILE__, __func__ , ## arg); \
+	obex_debug("%s:%s() " fmt,  __FILE__, __func__ , ## arg); \
 } while (0)

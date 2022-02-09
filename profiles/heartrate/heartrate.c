@@ -33,6 +33,15 @@
 #define HRP_UUID16 0x180d
 #define HRP_MEASUREMENT 0x2a37
 
+struct hrm_flag
+{
+	unsigned char hr 	: 1;
+	unsigned char sc 	: 2;
+	unsigned char ee 	: 1;
+	unsigned char rr 	: 1;
+	unsigned char rffu 	: 3;
+} __attribute__((packed));
+
 struct heartrate
 {
     struct btd_device *device;
@@ -41,6 +50,11 @@ struct heartrate
     struct gatt_db_attribute *attr_service;
 
     uint16_t heart_rate_measurement_handle;
+	int hrm_value;
+	int hrm_ee_value;
+
+	uint16_t body_sensor_location_handle;
+	int bsl_value;
 };
 
 static void heartrate_free(struct heartrate *p)
@@ -62,7 +76,36 @@ static void heartrate_reset(struct heartrate *p)
 
 static void parse_heartrate_measurement_value(struct heartrate *p, const uint8_t *value)
 {
-    DBG("RECEIVE HEARTRATE data: %d\n", *value);
+	struct hrm_flag flag = *(struct hrm_flag *) value;
+	DBG("HRM-FLAG HR : %d  -  value format is %s", flag.hr, flag.hr == 0 ? "UINT8" : "UINT16");
+	switch (flag.sc) {
+		case 0: case 1:
+			DBG("HRM-FLAG SC : %d  -  sc is not supported", flag.sc);
+			break;
+		case 2:
+			DBG("HRM-FLAG SC : %d  -  sc is supported, but contact is not detected", flag.sc);
+			break;
+		case 3:
+			DBG("HRM-FLAG SC : %d  -  sc is supported and contact is detected", flag.sc);
+			break;
+	}
+	DBG("HRM-FLAG EE : %d  -  ee is %s", flag.ee, flag.ee == 0 ? "not present" : "present");
+	DBG("HRM-FLAG RR : %d  -  rr is %s", flag.rr, flag.rr == 0 ? "not present" : "present");
+	DBG("HRM-FLAG RFFU : %d", flag.rffu);
+
+	if (flag.hr == 0) {
+		p->hrm_value = value[1];
+		if (flag.ee) {
+			p->hrm_ee_value = value[2];
+		}
+	} else {
+		p->hrm_value = *(const uint16_t *)(value + 1);
+		if (flag.ee) {
+			p->hrm_ee_value = value[3];
+		}
+	}
+	DBG("HRM VALUE: %d\n", p->hrm_value);
+	DBG("HRM EE VALUE: %d\n", p->hrm_ee_value);
 }
 
 static void hrp_io_value_cb(uint16_t value_handle, const uint8_t *value,
@@ -72,6 +115,8 @@ static void hrp_io_value_cb(uint16_t value_handle, const uint8_t *value,
 
 	if (value_handle == p->heart_rate_measurement_handle) {
 		parse_heartrate_measurement_value(p, value);
+	} else if (value_handle == p->body_sensor_location_handle) {
+
 	} else {
 		g_assert_not_reached();
 	}
@@ -87,27 +132,12 @@ static void hrp_io_ccc_written_cb(uint16_t att_ecode, void *user_data)
 		return;
 	}
 
-	DBG("Battery Level: notification enabled");
+	DBG("Heart Rate: notification enabled");
 }
 
-static void read_initial_heartrate_measurement_cb(bool success,
-						uint8_t att_ecode,
-						const uint8_t *value,
-						uint16_t length,
-						void *user_data)
+static void handle_heartrate_measurement(struct heartrate *p, uint16_t value_handle)
 {
-	struct heartrate *p = user_data;
-
-	if (!success) {
-		DBG("Reading heartrate measurement failed with ATT errror: %u",
-								att_ecode);
-		return;
-	}
-
-	if (!length)
-		return;
-
-    parse_heartrate_measurement_value(p, value);
+	p->heart_rate_measurement_handle = value_handle;
 
 	bt_gatt_client_register_notify(p->client,
 		                               p->heart_rate_measurement_handle,
@@ -117,23 +147,68 @@ static void read_initial_heartrate_measurement_cb(bool success,
 		                               NULL);
 }
 
-static void handle_heartrate_measurement(struct heartrate *p, uint16_t value_handle)
+static void read_body_sensor_location_cb(bool success,
+						uint8_t att_ecode,
+						const uint8_t *value,
+						uint16_t length,
+						void *user_data)
 {
-	p->heart_rate_measurement_handle = value_handle;
+	struct heartrate *p = user_data;
 
-	if (!bt_gatt_client_read_value(p->client, value_handle,
-						read_initial_heartrate_measurement_cb, p, NULL))
-		DBG("Failed to send request to read heartrate_measurement");
+	if (!success) {
+		DBG("Reading body sensor location failed with ATT errror: %u",
+								att_ecode);
+		return;
+	}
+
+	if (!length)
+		return;
+
+	p->bsl_value = value[0];
+	char bsl_name[64];
+	switch (value[0]) {
+		case 0:
+			sprintf(bsl_name, "Other");
+			break;
+		case 1:
+			sprintf(bsl_name, "Chest");
+			break;
+		case 2:
+			sprintf(bsl_name, "Wrist");
+			break;
+		case 3:
+			sprintf(bsl_name, "Finger");
+			break;
+		case 4:
+			sprintf(bsl_name, "Hand");
+			break;
+		case 5:
+			sprintf(bsl_name, "Ear Lobe");
+			break;
+		case 6:
+			sprintf(bsl_name, "Foot");
+			break;
+		default:
+			sprintf(bsl_name, "Unknown");
+			break;
+	}
+	DBG("body sensor location value: %s", bsl_name);
+
+	bt_gatt_client_register_notify(p->client,
+		                               p->body_sensor_location_handle,
+		                               hrp_io_ccc_written_cb,
+		                               hrp_io_value_cb,
+		                               p,
+		                               NULL);
 }
 
-
-static bool uuid_cmp(uint16_t u16, const bt_uuid_t *uuid)
+static void handle_body_sensor_location(struct heartrate *p, uint16_t value_handle)
 {
-	bt_uuid_t lhs;
+	p->body_sensor_location_handle = value_handle;
 
-	bt_uuid16_create(&lhs, u16);
-
-	return bt_uuid_cmp(&lhs, uuid) == 0;
+	if (!bt_gatt_client_read_value(p->client, p->body_sensor_location_handle,
+						read_body_sensor_location_cb, p, NULL))
+		DBG("Failed to send request to read body sensor location");
 }
 
 static void handle_characteristic(struct gatt_db_attribute *attr,
@@ -149,12 +224,15 @@ static void handle_characteristic(struct gatt_db_attribute *attr,
 		return;
 	}
 
-	if (uuid_cmp(HRP_MEASUREMENT, &uuid)) {
+	char uuid_str[MAX_LEN_UUID_STR];
+	bt_uuid_to_string(&uuid, uuid_str, sizeof(uuid_str));
+	if (strcmp(uuid_str, HEART_RATE_MEASUREMENT_UUID) == 0) {
 		handle_heartrate_measurement(p, value_handle);
-	} else {
-		char uuid_str[MAX_LEN_UUID_STR];
+	} else if (strcmp(uuid_str, BODY_SENSOR_LOCATION_UUID) == 0) {
+		handle_body_sensor_location(p, value_handle);
+	} else if (strcmp(uuid_str, HEART_RATE_CONTROL_POINT_UUID) == 0) {
 
-		bt_uuid_to_string(&uuid, uuid_str, sizeof(uuid_str));
+	} else {
 		DBG("Unsupported characteristic: %s", uuid_str);
 	}
 }
