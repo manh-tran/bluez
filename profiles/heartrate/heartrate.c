@@ -336,6 +336,7 @@ static int heartrate_accept(struct btd_service *service)
 static int heartrate_disconnect(struct btd_service *service)
 {
     struct heartrate *p = btd_service_get_user_data(service);
+	DBG("HRP profile disconnect");
 
 	heartrate_reset(p);
 	btd_service_disconnecting_complete(service, 0);
